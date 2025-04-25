@@ -1,0 +1,75 @@
+import pandas as pd
+
+def analyze_rental_business(
+    fuel_log_file, gps_log_file, maintenance_log_file, reservation_log_file, enterprise_log_file, output_file
+):
+    # Load data from Excel files
+    fuel_log = pd.read_excel(fuel_log_file)
+    gps_log = pd.read_excel(gps_log_file)
+    maintenance_log = pd.read_excel(maintenance_log_file)
+    reservation_log = pd.read_excel(reservation_log_file)
+    enterprise_log = pd.read_excel(enterprise_log_file)
+    
+    # Define Tennessee and bordering states
+    service_states = {"TN", "KY", "VA", "NC", "GA", "AL", "MS", "AR", "MO"}
+    
+    # Add a column to GPS log to determine if vehicle is out of service area
+    gps_log['OutOfServiceArea'] = ~gps_log['State'].isin(service_states)
+    
+    # Merge logs to associate costs with vehicles
+    merged_data = pd.merge(gps_log, fuel_log, on='VehicleNumber', how='left')
+    merged_data = pd.merge(merged_data, maintenance_log, on='VehicleNumber', how='left')
+    merged_data = pd.merge(merged_data, reservation_log, on='VehicleNumber', how='left')
+    
+    # Calculate out-of-service-area costs
+    oosa_data = merged_data[merged_data['OutOfServiceArea']]
+    oosa_costs = oosa_data.groupby('VehicleNumber').agg({
+        'MaintenanceCost': 'sum',
+        'TowingCost': 'sum',
+        'HotelCost': 'sum',
+        'OtherExpenses': 'sum'
+    }).fillna(0)
+    oosa_costs['TotalOOSACost'] = oosa_costs.sum(axis=1)
+    
+    # Calculate total Enterprise sublet costs and revenue
+    enterprise_summary = enterprise_log.groupby('ReservationID').agg({
+        'EnterpriseCost': 'sum',
+        'CustomerRevenue': 'sum'
+    }).fillna(0)
+    enterprise_summary['NetRevenue'] = enterprise_summary['CustomerRevenue'] - enterprise_summary['EnterpriseCost']
+    total_enterprise_revenue = enterprise_summary['CustomerRevenue'].sum()
+    total_enterprise_costs = enterprise_summary['EnterpriseCost'].sum()
+    total_enterprise_net = enterprise_summary['NetRevenue'].sum()
+    
+    # Calculate lost revenue from Enterprise sublets
+    total_reservations = reservation_log['ReservationID'].nunique()
+    sublet_reservations = enterprise_log['ReservationID'].nunique()
+    lost_business = total_reservations - sublet_reservations
+    
+    # Save results to an output Excel file
+    with pd.ExcelWriter(output_file) as writer:
+        oosa_costs.to_excel(writer, sheet_name="OutOfServiceAreaCosts")
+        enterprise_summary.to_excel(writer, sheet_name="EnterpriseSubletSummary")
+        
+        # Write summary
+        summary = {
+            "TotalEnterpriseRevenue": [total_enterprise_revenue],
+            "TotalEnterpriseCosts": [total_enterprise_costs],
+            "TotalEnterpriseNet": [total_enterprise_net],
+            "LostBusinessToEnterprise": [lost_business]
+        }
+        summary_df = pd.DataFrame(summary)
+        summary_df.to_excel(writer, sheet_name="Summary", index=False)
+    
+    print("Analysis completed. Results saved to:", output_file)
+
+
+# Example usage
+analyze_rental_business(
+    fuel_log_file="https://github.com/seanmosdef/vehicle-cost-dashboard/blob/main/analyze_rental_business/fuel_log.xlsx",
+    gps_log_file="https://github.com/seanmosdef/vehicle-cost-dashboard/blob/main/analyze_rental_business/gps_log.xlsx",
+    maintenance_log_file="https://github.com/seanmosdef/vehicle-cost-dashboard/blob/main/analyze_rental_business/maintenance_log.xlsx",
+    reservation_log_file="https://github.com/seanmosdef/vehicle-cost-dashboard/blob/main/analyze_rental_business/reservation_log.xlsx",
+    enterprise_log_file="https://github.com/seanmosdef/vehicle-cost-dashboard/blob/main/analyze_rental_business/enterprise_log.xlsx",
+    output_file="https://github.com/seanmosdef/vehicle-cost-dashboard/blob/main/analyze_rental_business/analysis_results.xlsx"
+)
